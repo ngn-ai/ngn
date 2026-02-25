@@ -3,10 +3,8 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import anthropic
-import pytest
 
 from ngn_agent.coder import (
-    _blocked,
     _build_prompt,
     _dispatch,
     _list_directory,
@@ -270,7 +268,8 @@ def test_implement_ticket_api_error_returns_blocked(tmp_path):
     client = MagicMock(spec=anthropic.Anthropic)
     client.messages.create.side_effect = _make_api_status_error(500)
 
-    result = implement_ticket(_make_ticket(), tmp_path, client)
+    with patch("ngn_agent.coder.time.sleep"):  # prevent 60×60s retry sleeps
+        result = implement_ticket(_make_ticket(), tmp_path, client)
 
     assert result["success"] is False
     assert "API error" in result["blocked_reason"]
