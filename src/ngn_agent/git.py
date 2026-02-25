@@ -1,10 +1,11 @@
+import shutil
 import subprocess
 from pathlib import Path
 
 
 def clone_repo(repo_url: str, dest: Path) -> None:
     if dest.exists():
-        raise FileExistsError(f"Destination already exists: {dest}")
+        shutil.rmtree(dest)
     dest.parent.mkdir(parents=True, exist_ok=True)
     result = subprocess.run(
         ["git", "clone", repo_url, str(dest)],

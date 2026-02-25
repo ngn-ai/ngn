@@ -1,4 +1,7 @@
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
+
+import anthropic
+import pytest
 
 from ngn_agent.validator import _format_ticket, validate_ticket
 
@@ -54,6 +57,35 @@ def test_format_ticket_includes_parent_reference():
 
 
 # --- validate_ticket ---
+
+def _make_api_status_error(status_code):
+    response = MagicMock()
+    response.status_code = status_code
+    exc = anthropic.APIStatusError(message="error", response=response, body={})
+    exc.status_code = status_code
+    return exc
+
+
+def test_validate_ticket_retries_on_overloaded():
+    good_response = _make_tool_response(valid=True, missing=[])
+    client = MagicMock()
+    client.messages.create.side_effect = [
+        _make_api_status_error(529),
+        good_response,
+    ]
+    with patch("ngn_agent.validator.time.sleep"):
+        result = validate_ticket(_make_ticket(), client)
+    assert result["valid"] is True
+    assert client.messages.create.call_count == 2
+
+
+def test_validate_ticket_raises_after_max_retries():
+    client = MagicMock()
+    client.messages.create.side_effect = _make_api_status_error(529)
+    with patch("ngn_agent.validator.time.sleep"):
+        with pytest.raises(anthropic.APIStatusError):
+            validate_ticket(_make_ticket(), client)
+
 
 def test_validate_ticket_returns_tool_result():
     client = MagicMock()

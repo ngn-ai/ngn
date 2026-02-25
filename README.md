@@ -58,8 +58,9 @@ Epics are intentionally excluded — they are created and managed by humans.
 | Status | Meaning |
 |---|---|
 | `READY` | Ticket is eligible for the agent to pick up |
-| `BLOCKED` | Set by the agent when a ticket fails validation |
+| `BLOCKED` | Set by the agent when a ticket fails validation or implementation is stuck |
 | `IN PROGRESS` | Set by the agent when it begins implementation |
+| `IN REVIEW` | Set by the agent after a pull request is successfully created |
 
 The status name `READY` is case-sensitive in JQL. Ensure your project's workflow uses this exact name.
 
@@ -69,8 +70,9 @@ The project workflow must include the following transitions:
 
 | Transition | From | Notes |
 |---|---|---|
-| `BLOCKED` | `READY` | Set when a ticket fails validation |
+| `BLOCKED` | `READY` or `IN PROGRESS` | Set when validation fails or implementation is stuck |
 | `IN PROGRESS` | `READY` | Set when the agent begins implementation |
+| `IN REVIEW` | `IN PROGRESS` | Set when the agent opens a pull request |
 
 The agent performs a case-insensitive match on transition names.
 

@@ -39,8 +39,11 @@ def test_clone_repo_raises_on_nonzero_exit(tmp_path):
             clone_repo("https://github.com/example/repo.git", dest)
 
 
-def test_clone_repo_raises_if_dest_exists(tmp_path):
+def test_clone_repo_removes_existing_dest_and_reclones(tmp_path):
     dest = tmp_path / "repo"
     dest.mkdir()
-    with pytest.raises(FileExistsError, match="already exists"):
+    (dest / "stale_file.txt").write_text("old")
+    with patch("subprocess.run", return_value=_make_result()) as mock_run:
         clone_repo("https://github.com/example/repo.git", dest)
+    assert not (dest / "stale_file.txt").exists()
+    mock_run.assert_called_once()

@@ -1,4 +1,12 @@
+import logging
+import time
+
 import anthropic
+
+log = logging.getLogger(__name__)
+
+_MAX_RETRIES = 60
+_RETRY_DELAY = 60
 
 _SYSTEM_PROMPT = """You are validating a JIRA ticket to determine whether it contains sufficient information for an autonomous coding agent to implement it.
 
@@ -41,14 +49,24 @@ def validate_ticket(ticket: dict, client: anthropic.Anthropic, ancestors: list[d
     if ancestors:
         ancestor_sections = "\n\n---\n\n".join(_format_ticket(a) for a in ancestors)
         content = f"Ancestor ticket context (outermost to innermost):\n\n{ancestor_sections}\n\n---\n\nTicket to validate:\n{content}"
-    response = client.messages.create(
-        model="claude-sonnet-4-6",
-        max_tokens=1024,
-        system=_SYSTEM_PROMPT,
-        tools=[_VALIDATION_TOOL],
-        tool_choice={"type": "tool", "name": "submit_validation"},
-        messages=[{"role": "user", "content": content}],
-    )
+    for attempt in range(_MAX_RETRIES):
+        try:
+            response = client.messages.create(
+                model="claude-sonnet-4-6",
+                max_tokens=1024,
+                system=_SYSTEM_PROMPT,
+                tools=[_VALIDATION_TOOL],
+                tool_choice={"type": "tool", "name": "submit_validation"},
+                messages=[{"role": "user", "content": content}],
+            )
+            break
+        except anthropic.APIStatusError as exc:
+            if exc.status_code not in (429, 529):
+                raise
+            if attempt == _MAX_RETRIES - 1:
+                raise
+            log.warning("API unavailable (%s), will retry in %ss (attempt %s/%s)...", exc.status_code, _RETRY_DELAY, attempt + 1, _MAX_RETRIES)
+            time.sleep(_RETRY_DELAY)
     for block in response.content:
         if block.type == "tool_use" and block.name == "submit_validation":
             return block.input
