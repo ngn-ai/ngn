@@ -1,0 +1,118 @@
+# ngn-agent
+
+An autonomous coding agent powered by Claude. Polls a JIRA project for eligible work, validates tickets, and (eventually) implements, tests, and opens pull requests for approved tasks.
+
+## Setup
+
+### Prerequisites
+
+- Python 3.11+
+- [uv](https://docs.astral.sh/uv/)
+- An Anthropic API key
+- A JIRA Cloud instance with API access
+
+### Install
+
+```bash
+uv sync
+. .venv/bin/activate
+```
+
+### Environment variables
+
+| Variable | Description |
+|---|---|
+| `ANTHROPIC_API_KEY` | Anthropic API key |
+| `JIRA_BASE_URL` | JIRA Cloud base URL, e.g. `https://yourcompany.atlassian.net` |
+| `JIRA_EMAIL` | Email address associated with the API token |
+| `JIRA_API_TOKEN` | JIRA Cloud API token (generate at id.atlassian.com → Security → API tokens) |
+| `JIRA_FILTER_ID` | Numeric ID of the saved JIRA filter to poll for candidate tickets |
+
+### Run
+
+```bash
+ngn-agent
+```
+
+---
+
+## JIRA configuration requirements
+
+The agent makes specific assumptions about how your JIRA project is set up. These must match exactly.
+
+### Issue types
+
+The agent only works on the following issue types. All others (including Epics) are ignored.
+
+| Type | Notes |
+|---|---|
+| `Bug` | Highest priority in the work queue |
+| `Task` | Sorted equally with Story, by priority then age |
+| `Story` | Sorted equally with Task, by priority then age |
+
+Epics are intentionally excluded — they are created and managed by humans.
+
+### Statuses
+
+| Status | Meaning |
+|---|---|
+| `READY` | Ticket is eligible for the agent to pick up |
+| `Blocked` | Set by the agent when a ticket fails validation |
+
+The status name `READY` is case-sensitive in JQL. Ensure your project's workflow uses this exact name.
+
+### Workflow transitions
+
+The project workflow must include a transition named **`Blocked`** that is reachable from the `READY` status. The agent performs a case-insensitive match, so `Blocked`, `blocked`, and `BLOCKED` all work.
+
+### Saved filter
+
+Create a saved JIRA filter and note its numeric ID (visible in the URL when viewing the filter). The agent applies the following additional constraints on top of whatever the filter returns:
+
+```
+AND issuetype in (Bug, Task, Story) AND status = READY
+```
+
+The filter itself can contain any other constraints (project, labels, components, etc.) to narrow down which tickets the agent considers. A reasonable starting filter might be:
+
+```
+project = MYPROJECT ORDER BY created ASC
+```
+
+### Work queue priority
+
+Within the results returned by the filter, the agent sorts tickets in this order:
+
+1. **Issue type** — Bugs first, Tasks and Stories treated equally
+2. **Priority** — Highest → High → Medium → Low → Lowest
+3. **Age** — Oldest created date first (within the same priority)
+
+---
+
+## Ticket content requirements
+
+Before working on a ticket, the agent validates that it contains sufficient information. A ticket that fails validation is transitioned to `Blocked` and a comment is posted explaining what is missing.
+
+A ticket must contain all four of the following:
+
+### 1. Repository URL
+A Git URL or clear reference to the codebase where the work should be done. This can appear anywhere in the ticket — the description, a custom field, or a comment.
+
+### 2. Current context / behaviour
+A description of how things work today — the "as-is" state. This gives the agent enough background to understand what it is changing and why.
+
+### 3. Desired outcome
+A clear description of what the implementation should achieve. Include any technical requirements, constraints, or design decisions that the implementation must satisfy.
+
+### 4. Test requirements
+A description of what tests are expected, what scenarios should be covered, or how the implementation will be verified. This can be a list of test cases, a description of testing strategy, or acceptance criteria written in a testable form.
+
+---
+
+## Development
+
+```bash
+pytest tests/ -v      # run tests
+ruff check .          # lint
+ruff format .         # format
+```

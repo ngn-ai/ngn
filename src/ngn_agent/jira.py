@@ -17,11 +17,43 @@ class JiraClient:
             auth=self.auth,
             headers=self.headers,
             params={
-                "fields": "summary,description,status,priority,assignee,issuetype,created,updated,labels,comment,parent",
+                "fields": "summary,description,status,priority,assignee,reporter,issuetype,created,updated,labels,comment,parent",
             },
         )
         response.raise_for_status()
         return _extract_full_ticket(response.json())
+
+    def transition_ticket(self, key: str, status_name: str) -> None:
+        response = httpx.get(
+            f"{self.base_url}/rest/api/3/issue/{key}/transitions",
+            auth=self.auth,
+            headers=self.headers,
+        )
+        response.raise_for_status()
+        transitions = response.json().get("transitions", [])
+        match = next(
+            (t for t in transitions if t["name"].lower() == status_name.lower()),
+            None,
+        )
+        if match is None:
+            available = [t["name"] for t in transitions]
+            raise ValueError(f"No transition named {status_name!r} for {key}. Available: {available}")
+        response = httpx.post(
+            f"{self.base_url}/rest/api/3/issue/{key}/transitions",
+            auth=self.auth,
+            headers={**self.headers, "Content-Type": "application/json"},
+            json={"transition": {"id": match["id"]}},
+        )
+        response.raise_for_status()
+
+    def post_comment(self, key: str, lines: list[str], mention: tuple[str, str] | None = None) -> None:
+        response = httpx.post(
+            f"{self.base_url}/rest/api/3/issue/{key}/comment",
+            auth=self.auth,
+            headers={**self.headers, "Content-Type": "application/json"},
+            json={"body": _build_comment_adf(lines, mention)},
+        )
+        response.raise_for_status()
 
     def get_tickets_from_filter(self, filter_id: str) -> list[dict]:
         response = httpx.post(
@@ -54,6 +86,10 @@ def _extract_full_ticket(issue: dict) -> dict:
         "updated": fields["updated"],
         "labels": fields.get("labels", []),
         "parent": {"key": parent["key"], "summary": parent["fields"]["summary"]} if parent else None,
+        "reporter": (
+            {"account_id": fields["reporter"]["accountId"], "display_name": fields["reporter"]["displayName"]}
+            if fields.get("reporter") else None
+        ),
         "description": _adf_to_text(fields.get("description")),
         "comments": [
             {
@@ -64,6 +100,23 @@ def _extract_full_ticket(issue: dict) -> dict:
             for c in (fields.get("comment") or {}).get("comments", [])
         ],
     }
+
+
+def _build_comment_adf(lines: list[str], mention: tuple[str, str] | None = None) -> dict:
+    content = [
+        {"type": "paragraph", "content": [{"type": "text", "text": line}]}
+        for line in lines
+    ]
+    if mention:
+        account_id, display_name = mention
+        content.append({
+            "type": "paragraph",
+            "content": [
+                {"type": "mention", "attrs": {"id": account_id, "text": f"@{display_name}"}},
+                {"type": "text", "text": " please update the ticket and return it to Ready when complete."},
+            ],
+        })
+    return {"version": 1, "type": "doc", "content": content}
 
 
 def _adf_to_text(node: dict | None) -> str:
