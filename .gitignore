@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg
+*.egg-info/
+dist/
+build/
+*.so
+
+# uv / virtual envs
+.venv/
+venv/
+.env
+
+# uv lock (keep uv.lock in source control, but not the cache)
+.uv/
+
+# Secrets / config
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Testing / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
