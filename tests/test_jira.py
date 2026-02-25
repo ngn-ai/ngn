@@ -260,12 +260,12 @@ def test_get_ticket_url(client, httpx_mock: HTTPXMock):
 def test_transition_ticket(client, httpx_mock: HTTPXMock):
     httpx_mock.add_response(json={"transitions": [
         {"id": "11", "name": "In Progress"},
-        {"id": "21", "name": "Blocked"},
+        {"id": "21", "name": "BLOCKED"},
         {"id": "31", "name": "Done"},
     ]})
     httpx_mock.add_response(status_code=204)
 
-    client.transition_ticket("PROJ-1", "Blocked")
+    client.transition_ticket("PROJ-1", "BLOCKED")
 
     requests = httpx_mock.get_requests()
     assert requests[0].url.path == "/rest/api/3/issue/PROJ-1/transitions"
@@ -276,7 +276,7 @@ def test_transition_ticket(client, httpx_mock: HTTPXMock):
 
 
 def test_transition_ticket_case_insensitive(client, httpx_mock: HTTPXMock):
-    httpx_mock.add_response(json={"transitions": [{"id": "21", "name": "Blocked"}]})
+    httpx_mock.add_response(json={"transitions": [{"id": "21", "name": "BLOCKED"}]})
     httpx_mock.add_response(status_code=204)
     client.transition_ticket("PROJ-1", "blocked")
     assert json.loads(httpx_mock.get_requests()[1].content) == {"transition": {"id": "21"}}
@@ -287,8 +287,8 @@ def test_transition_ticket_not_found(client, httpx_mock: HTTPXMock):
         {"id": "11", "name": "In Progress"},
         {"id": "31", "name": "Done"},
     ]})
-    with pytest.raises(ValueError, match="No transition named 'Blocked'"):
-        client.transition_ticket("PROJ-1", "Blocked")
+    with pytest.raises(ValueError, match="No transition named 'BLOCKED'"):
+        client.transition_ticket("PROJ-1", "BLOCKED")
 
 
 # --- _build_comment_adf ---
@@ -329,3 +329,14 @@ def test_post_comment_with_mention(client, httpx_mock: HTTPXMock):
     last_para = body["body"]["content"][-1]["content"]
     assert last_para[0]["type"] == "mention"
     assert last_para[0]["attrs"]["id"] == "acc-123"
+
+
+# --- add_label ---
+
+def test_add_label(client, httpx_mock: HTTPXMock):
+    httpx_mock.add_response(status_code=204)
+    client.add_label("PROJ-1", "agent-ngn")
+    request = httpx_mock.get_requests()[0]
+    assert request.url.path == "/rest/api/3/issue/PROJ-1"
+    assert request.method == "PUT"
+    assert json.loads(request.content) == {"update": {"labels": [{"add": "agent-ngn"}]}}

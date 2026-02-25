@@ -1,8 +1,10 @@
 import os
 import sys
+from pathlib import Path
 
 import anthropic
 
+from ngn_agent.git import clone_repo
 from ngn_agent.jira import JiraClient
 from ngn_agent.validator import validate_ticket
 
@@ -32,19 +34,37 @@ def main() -> None:
     print("Fetching full ticket details...")
     ticket = jira.get_ticket(top["key"])
 
+    ancestors = []
+    current = ticket
+    while current.get("parent"):
+        parent_key = current["parent"]["key"]
+        print(f"Fetching ancestor ticket {parent_key}...")
+        parent = jira.get_ticket(parent_key)
+        ancestors.insert(0, parent)
+        current = parent
+
     print("Validating ticket with Claude...")
-    result = validate_ticket(ticket, claude)
+    result = validate_ticket(ticket, claude, ancestors=ancestors or None)
 
     if result["valid"]:
-        repo_url = result.get("repo_url", "(not extracted)")
-        print(f"\n✓ Ticket is valid. Ready to proceed.")
-        print(f"  Repo: {repo_url}")
+        repo_url = result.get("repo_url", "")
+        workspace = Path(os.environ.get("WORKSPACE_DIR", "workspaces")) / ticket["key"]
+        print(f"\n✓ Ticket is valid.")
+        print(f"  Repo:      {repo_url}")
+        print(f"  Workspace: {workspace}")
+        print(f"\nCloning repository...")
+        clone_repo(repo_url, workspace)
+        print(f"Transitioning {ticket['key']} to IN PROGRESS...")
+        jira.transition_ticket(ticket["key"], "IN PROGRESS")
+        print(f"Labelling {ticket['key']} as ngn-handled...")
+        jira.add_label(ticket["key"], "ngn-handled")
+        print("Done.")
     else:
         print(f"\n✗ Ticket is missing required information:")
         for item in result["missing"]:
             print(f"  - {item}")
-        print(f"\nTransitioning {ticket['key']} to Blocked...")
-        jira.transition_ticket(ticket["key"], "Blocked")
+        print(f"\nTransitioning {ticket['key']} to BLOCKED...")
+        jira.transition_ticket(ticket["key"], "BLOCKED")
 
         reporter = ticket.get("reporter")
         mention = (reporter["account_id"], reporter["display_name"]) if reporter else None

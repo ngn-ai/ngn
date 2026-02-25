@@ -55,6 +55,15 @@ class JiraClient:
         )
         response.raise_for_status()
 
+    def add_label(self, key: str, label: str) -> None:
+        response = httpx.put(
+            f"{self.base_url}/rest/api/3/issue/{key}",
+            auth=self.auth,
+            headers={**self.headers, "Content-Type": "application/json"},
+            json={"update": {"labels": [{"add": label}]}},
+        )
+        response.raise_for_status()
+
     def get_tickets_from_filter(self, filter_id: str) -> list[dict]:
         response = httpx.post(
             f"{self.base_url}/rest/api/3/search/jql",

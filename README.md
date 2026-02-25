@@ -27,6 +27,7 @@ uv sync
 | `JIRA_EMAIL` | Email address associated with the API token |
 | `JIRA_API_TOKEN` | JIRA Cloud API token (generate at id.atlassian.com → Security → API tokens) |
 | `JIRA_FILTER_ID` | Numeric ID of the saved JIRA filter to poll for candidate tickets |
+| `WORKSPACE_DIR` | Directory where repositories are cloned (default: `workspaces/`) |
 
 ### Run
 
@@ -57,13 +58,21 @@ Epics are intentionally excluded — they are created and managed by humans.
 | Status | Meaning |
 |---|---|
 | `READY` | Ticket is eligible for the agent to pick up |
-| `Blocked` | Set by the agent when a ticket fails validation |
+| `BLOCKED` | Set by the agent when a ticket fails validation |
+| `IN PROGRESS` | Set by the agent when it begins implementation |
 
 The status name `READY` is case-sensitive in JQL. Ensure your project's workflow uses this exact name.
 
 ### Workflow transitions
 
-The project workflow must include a transition named **`Blocked`** that is reachable from the `READY` status. The agent performs a case-insensitive match, so `Blocked`, `blocked`, and `BLOCKED` all work.
+The project workflow must include the following transitions:
+
+| Transition | From | Notes |
+|---|---|---|
+| `BLOCKED` | `READY` | Set when a ticket fails validation |
+| `IN PROGRESS` | `READY` | Set when the agent begins implementation |
+
+The agent performs a case-insensitive match on transition names.
 
 ### Saved filter
 
