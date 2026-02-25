@@ -1,6 +1,7 @@
 import logging
 import os
 import sys
+import time
 from pathlib import Path
 
 import anthropic
@@ -13,10 +14,20 @@ from ngn_agent.validator import validate_ticket
 _REQUIRED_ENV = ("ANTHROPIC_API_KEY", "JIRA_BASE_URL", "JIRA_EMAIL", "JIRA_API_TOKEN", "JIRA_FILTER_ID")
 _API_UNAVAILABLE = "Anthropic API was unavailable for an extended period — please retry later."
 
+# Minimum number of seconds to wait between Jira polls so we don't spin.
+_POLL_INTERVAL = 30
+
 log = logging.getLogger(__name__)
 
 
 def main() -> None:
+    """Entry point for ngn-agent.
+
+    Configures logging, validates required environment variables, then loops
+    forever polling Jira for new work.  Each iteration is rate-limited to at
+    most one poll every _POLL_INTERVAL seconds so the agent doesn't spin.
+    The loop runs until the process is killed (e.g. SIGINT / SIGTERM).
+    """
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)-8s %(message)s",
@@ -35,6 +46,36 @@ def main() -> None:
     jira = JiraClient()
     claude = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
 
+    log.info("ngn-agent started — polling every %ss. Press Ctrl-C to stop.", _POLL_INTERVAL)
+
+    # Infinite polling loop — runs until the process is killed.
+    while True:
+        iteration_start = time.monotonic()
+
+        poll_once(jira, claude)
+
+        # Sleep for the remainder of the interval so we poll at most once per
+        # _POLL_INTERVAL seconds regardless of how long the work took.
+        elapsed = time.monotonic() - iteration_start
+        wait = _POLL_INTERVAL - elapsed
+        if wait > 0:
+            log.info("Sleeping %.1fs until next poll...", wait)
+            time.sleep(wait)
+
+
+def poll_once(jira: JiraClient, claude: anthropic.Anthropic) -> None:
+    """Poll Jira for a single candidate ticket and attempt to implement it.
+
+    This function encapsulates one full iteration of the agent loop: it fetches
+    the top-priority ticket from the configured Jira filter, validates it with
+    Claude, and drives the implementation through to a pull request (or marks
+    the ticket as BLOCKED on failure).  It is a no-op when no candidate tickets
+    are found.
+
+    Args:
+        jira: Authenticated Jira client.
+        claude: Anthropic API client used for validation and implementation.
+    """
     log.info("Polling JIRA filter %s...", os.environ["JIRA_FILTER_ID"])
     tickets = jira.get_tickets_from_filter(os.environ["JIRA_FILTER_ID"])
 
@@ -111,7 +152,3 @@ def main() -> None:
         jira.post_comment(ticket["key"], lines, mention=mention)
 
     log.info("Done.")
-
-
-if __name__ == "__main__":
-    main()
