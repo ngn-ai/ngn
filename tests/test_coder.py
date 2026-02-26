@@ -1,6 +1,6 @@
 import subprocess
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 import anthropic
 
@@ -38,6 +38,14 @@ def _tool_use_block(name, input_, id_="tu_1"):
     block.name = name
     block.input = input_
     block.id = id_
+    return block
+
+
+def _text_block(text):
+    """Build a mock text content block."""
+    block = MagicMock()
+    block.type = "text"
+    block.text = text
     return block
 
 
@@ -299,3 +307,51 @@ def test_build_prompt_with_ancestors_includes_header_and_content(tmp_path):
     assert "EPIC_CONTENT" in prompt
     assert "CHILD_CONTENT" in prompt
     assert prompt.index("EPIC_CONTENT") < prompt.index("CHILD_CONTENT")
+
+
+# ---------------------------------------------------------------------------
+# implement_ticket — agent text block logging
+# ---------------------------------------------------------------------------
+
+def test_implement_ticket_logs_agent_text_blocks(tmp_path):
+    """A text block preceding a tool-use block is logged via log.info."""
+    reasoning = "I'll explore the top-level directory to understand the project layout."
+    text = _text_block(reasoning)
+    submit = _tool_use_block("submit_work", {"pr_url": "http://pr", "summary": "done"})
+    client = _make_client(_make_response([text, submit]))
+
+    with patch("ngn_agent.coder.log") as mock_log:
+        implement_ticket(_make_ticket(), tmp_path, client)
+
+    # Collect all positional arg strings from info calls and verify the
+    # reasoning text appears in at least one of them.
+    info_calls = mock_log.info.call_args_list
+    logged_messages = [str(c) for c in info_calls]
+    assert any(reasoning in msg for msg in logged_messages)
+
+
+def test_implement_ticket_ignores_empty_text_blocks(tmp_path):
+    """A text block containing only whitespace must not produce a log.info call."""
+    whitespace_text = _text_block("   \n\t  ")
+    submit = _tool_use_block("submit_work", {"pr_url": "http://pr", "summary": "done"})
+    client = _make_client(_make_response([whitespace_text, submit]))
+
+    with patch("ngn_agent.coder.log") as mock_log:
+        implement_ticket(_make_ticket(), tmp_path, client)
+
+    # None of the info calls should contain "Agent: " prefixed reasoning text
+    # (the whitespace block should have been silently skipped).
+    info_calls = mock_log.info.call_args_list
+    agent_calls = [c for c in info_calls if c.args and "Agent: " in str(c.args[0])]
+    assert len(agent_calls) == 0
+
+
+def test_implement_ticket_no_text_block_does_not_error(tmp_path):
+    """A response with only tool-use blocks and no text block completes without error."""
+    submit = _tool_use_block("submit_work", {"pr_url": "http://pr", "summary": "done"})
+    client = _make_client(_make_response([submit]))
+
+    # Should not raise; success result expected.
+    result = implement_ticket(_make_ticket(), tmp_path, client)
+
+    assert result["success"] is True

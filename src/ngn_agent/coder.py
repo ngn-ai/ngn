@@ -47,7 +47,9 @@ _SYSTEM_PROMPT = """You are an autonomous coding agent implementing a JIRA ticke
 - The ticket is ambiguous and you cannot proceed safely without clarification.
 - Tests continue to fail after multiple attempts to fix the code.
 - You encounter an unresolvable error or missing external dependency.
-Be specific so a human can act on the reason."""
+Be specific so a human can act on the reason.
+
+Before each set of tool calls, include a brief one-sentence description of what you are about to do and why."""
 
 _TOOLS = [
     {
@@ -162,8 +164,11 @@ def implement_ticket(
 
         messages.append({"role": "assistant", "content": response.content})
 
-        # Check for terminal tool calls first — they end the loop immediately.
+        # Log any natural-language reasoning the agent emitted before its tool
+        # calls, then check for terminal tool calls that end the loop immediately.
         for block in response.content:
+            if block.type == "text" and block.text.strip():
+                log.info("Agent: %s", block.text.strip())
             if block.type == "tool_use" and block.name == "submit_work":
                 log.info("Agent submitted work: %s", block.input.get("summary"))
                 return {"success": True, "pr_url": block.input.get("pr_url"), "blocked_reason": None}
