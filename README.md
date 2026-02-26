@@ -45,6 +45,17 @@ The agent runs continuously, polling the configured JIRA filter every 30 seconds
 
 **PR review handling:** If a `ngn/<ticket-key>` branch already has an open pull request, the agent reads the reviewer feedback and addresses the requested changes on the existing branch and PR rather than opening a duplicate.
 
+### JIRA assumptions
+
+For the runtime to function correctly, the following JIRA setup assumptions must hold:
+
+- **Statuses** — The workflow must include `READY`, `IN PROGRESS`, `IN REVIEW`, and `BLOCKED` statuses. `READY` is the entry point; the agent drives all other transitions.
+- **Issue types** — Only `Bug`, `Task`, and `Story` are processed. Epics are ignored.
+- **Saved filter** — `JIRA_FILTER_ID` must point to a saved filter whose results the agent further narrows with `AND issuetype in (Bug, Task, Story) AND status = READY`.
+- **Transitions** — The workflow must expose `IN PROGRESS`, `IN REVIEW`, and `BLOCKED` as named transitions (matched case-insensitively).
+
+See [JIRA configuration requirements](#jira-configuration-requirements) below for the full details.
+
 ---
 
 ## JIRA configuration requirements
