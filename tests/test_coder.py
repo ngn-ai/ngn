@@ -299,3 +299,34 @@ def test_build_prompt_with_ancestors_includes_header_and_content(tmp_path):
     assert "EPIC_CONTENT" in prompt
     assert "CHILD_CONTENT" in prompt
     assert prompt.index("EPIC_CONTENT") < prompt.index("CHILD_CONTENT")
+
+
+def test_build_prompt_with_resume_branch_includes_resume_section(tmp_path):
+    """When resume_branch is provided, the prompt should contain the branch name
+    and the 'Resuming prior attempt' marker."""
+    prompt = _build_prompt(_make_ticket(), tmp_path, None, resume_branch="ngn/NGN-17")
+    assert "Resuming prior attempt" in prompt
+    assert "ngn/NGN-17" in prompt
+
+
+def test_build_prompt_without_resume_branch_omits_resume_section(tmp_path):
+    """When resume_branch is not provided, the prompt must not mention resumption."""
+    prompt = _build_prompt(_make_ticket(), tmp_path, None)
+    assert "Resuming prior attempt" not in prompt
+
+
+def test_implement_ticket_passes_resume_branch_to_prompt(tmp_path):
+    """When resume_branch is given, the initial user message sent to the API
+    should contain the branch name and the resume marker."""
+    submit = _tool_use_block("submit_work", {"pr_url": "http://pr", "summary": "done"})
+    client = _make_client(_make_response([submit]))
+
+    implement_ticket(_make_ticket(), tmp_path, client, resume_branch="ngn/NGN-17")
+
+    # Grab the messages list passed to the first API call.
+    call_args = client.messages.create.call_args
+    messages = call_args.kwargs.get("messages") or call_args.args[0] if call_args.args else call_args.kwargs["messages"]
+    initial_content = messages[0]["content"]
+
+    assert "ngn/NGN-17" in initial_content
+    assert "Resuming prior attempt" in initial_content

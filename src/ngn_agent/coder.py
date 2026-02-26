@@ -47,7 +47,8 @@ _SYSTEM_PROMPT = """You are an autonomous coding agent implementing a JIRA ticke
 - The ticket is ambiguous and you cannot proceed safely without clarification.
 - Tests continue to fail after multiple attempts to fix the code.
 - You encounter an unresolvable error or missing external dependency.
-Be specific so a human can act on the reason."""
+Be specific so a human can act on the reason.
+Before calling report_blocked, always commit any work completed so far to the ngn/<ticket-key> branch and push it to the remote, even if the implementation is incomplete. Use the commit message format [TICKET-KEY] WIP: <brief description>. This allows work to be resumed in a future attempt. If there is nothing to commit, skip this step."""
 
 _TOOLS = [
     {
@@ -130,6 +131,7 @@ def implement_ticket(
     workspace: Path,
     client: anthropic.Anthropic,
     ancestors: list[dict] | None = None,
+    resume_branch: str | None = None,
 ) -> dict:
     """Run the agentic implementation loop for a single ticket.
 
@@ -138,6 +140,10 @@ def implement_ticket(
         workspace: Path to the cloned repository on disk.
         client: Anthropic API client.
         ancestors: Optional list of ancestor tickets (outermost first) for context.
+        resume_branch: Optional branch name that already exists and has been
+            checked out in *workspace*.  When provided, the agent is instructed
+            to review existing commits before continuing rather than starting
+            from scratch.
 
     Returns:
         A dict with keys:
@@ -145,7 +151,7 @@ def implement_ticket(
             pr_url (str | None): Pull request URL on success.
             blocked_reason (str | None): Explanation if not successful.
     """
-    messages = [{"role": "user", "content": _build_prompt(ticket, workspace, ancestors)}]
+    messages = [{"role": "user", "content": _build_prompt(ticket, workspace, ancestors, resume_branch)}]
 
     for turn in range(_MAX_TURNS):
         log.info("Turn %d/%d...", turn + 1, _MAX_TURNS)
@@ -339,13 +345,22 @@ def _blocked(reason: str) -> dict:
     return {"success": False, "pr_url": None, "blocked_reason": reason}
 
 
-def _build_prompt(ticket: dict, workspace: Path, ancestors: list[dict] | None) -> str:
+def _build_prompt(
+    ticket: dict,
+    workspace: Path,
+    ancestors: list[dict] | None,
+    resume_branch: str | None = None,
+) -> str:
     """Build the initial user message for the implementation agent.
 
     Args:
         ticket: The ticket to implement.
         workspace: Path to the cloned repository.
         ancestors: Optional ancestor tickets for context, outermost first.
+        resume_branch: Optional name of a branch that already exists and has
+            been checked out in *workspace*.  When provided, a "Resuming prior
+            attempt" section is inserted before the "Begin by exploring" line
+            to instruct the agent to review existing work first.
 
     Returns:
         Formatted prompt string.
@@ -356,6 +371,17 @@ def _build_prompt(ticket: dict, workspace: Path, ancestors: list[dict] | None) -
         parts.append(f"Background context (do NOT implement these — for reference only):\n\n{ancestor_sections}\n\n---")
     parts.append(f"Ticket to implement (implement THIS ticket only):\n{_format_ticket(ticket)}")
     parts.append(f"Repository location: {workspace}")
+
+    # If a prior attempt exists, instruct the agent to review it before
+    # continuing rather than starting from scratch.
+    if resume_branch:
+        parts.append(
+            f"Resuming prior attempt: Branch {resume_branch} already exists and has been "
+            "checked out. It contains work from a previous attempt. Review the existing "
+            "commits and code before continuing — do not discard or re-do work that has "
+            "already been done correctly."
+        )
+
     parts.append("Begin by exploring the repository structure, then implement the ticket.")
     return "\n\n".join(parts)
 

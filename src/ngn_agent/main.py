@@ -1,5 +1,6 @@
 import logging
 import os
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -7,7 +8,7 @@ from pathlib import Path
 import anthropic
 
 from ngn_agent.coder import implement_ticket
-from ngn_agent.git import clone_repo
+from ngn_agent.git import clone_repo, find_resume_branch
 from ngn_agent.jira import JiraClient
 from ngn_agent.validator import validate_ticket
 
@@ -72,6 +73,11 @@ def poll_once(jira: JiraClient, claude: anthropic.Anthropic) -> None:
     the ticket as BLOCKED on failure).  It is a no-op when no candidate tickets
     are found.
 
+    When a ticket has been previously attempted, a branch named
+    ``ngn/<ticket-key>`` may already exist on the remote.  If it does, the
+    agent checks out that branch inside the workspace and is instructed to
+    resume from where the prior attempt left off.
+
     Args:
         jira: Authenticated Jira client.
         claude: Anthropic API client used for validation and implementation.
@@ -120,8 +126,38 @@ def poll_once(jira: JiraClient, claude: anthropic.Anthropic) -> None:
         log.info("Labelling %s as ngn-handled...", ticket["key"])
         jira.add_label(ticket["key"], "ngn-handled")
 
+        # Check whether a prior attempt left a branch on the remote that can
+        # be resumed instead of starting from scratch.
+        ticket_key = ticket["key"]
+        branch_name = f"ngn/{ticket_key}"
+        resume_branch: str | None = None
+
+        if find_resume_branch(repo_url, branch_name):
+            log.info("Found existing branch %s — checking it out for resumption.", branch_name)
+            # Switch the cloned workspace to the existing branch so the agent
+            # can build on prior work rather than re-doing it.
+            checkout_result = subprocess.run(
+                ["git", "-C", str(workspace), "checkout", branch_name],
+                capture_output=True,
+                text=True,
+            )
+            if checkout_result.returncode == 0:
+                resume_branch = branch_name
+            else:
+                log.warning(
+                    "Failed to check out existing branch %s: %s",
+                    branch_name,
+                    checkout_result.stderr.strip(),
+                )
+
         log.info("Implementing ticket...")
-        impl = implement_ticket(ticket, workspace, claude, ancestors=ancestors or None)
+        impl = implement_ticket(
+            ticket,
+            workspace,
+            claude,
+            ancestors=ancestors or None,
+            resume_branch=resume_branch,
+        )
 
         if impl["success"]:
             log.info("Implementation complete. PR: %s", impl["pr_url"])
