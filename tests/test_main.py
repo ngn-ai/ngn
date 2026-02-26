@@ -6,6 +6,7 @@ that the agent sleeps for the remainder of each interval.
 
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
 
 from ngn_agent.main import _POLL_INTERVAL, poll_once
@@ -247,3 +248,92 @@ def test_poll_once_includes_clone_error_message_in_comment(monkeypatch):
     comment_lines = jira.post_comment.call_args[0][1]
     full_comment = "\n".join(comment_lines)
     assert error_text in full_comment
+
+
+# ---------------------------------------------------------------------------
+# Polling loop — transient network error handling
+# ---------------------------------------------------------------------------
+
+def test_main_loop_continues_after_network_error(monkeypatch):
+    """The loop should continue after poll_once raises httpx.ConnectError.
+
+    Patch poll_once to raise httpx.ConnectError on the first call and return
+    normally on the second; assert the loop calls poll_once at least twice
+    without raising, confirming it recovers from the transient network error.
+    """
+    monkeypatch.setenv("JIRA_FILTER_ID", "99")
+    monkeypatch.setenv("JIRA_BASE_URL", "https://test.atlassian.net")
+    monkeypatch.setenv("JIRA_EMAIL", "a@b.com")
+    monkeypatch.setenv("JIRA_API_TOKEN", "tok")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "key")
+
+    call_count = 0
+
+    def fake_poll_once(jira, claude):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            # Simulate a transient DNS / connection failure on the first attempt.
+            raise httpx.ConnectError("Connection refused")
+        # Second call succeeds; exit the loop via SystemExit so the test terminates.
+        if call_count >= 2:
+            raise SystemExit(0)
+
+    # Enough monotonic values for two iterations (start + end each).
+    monotonic_values = iter([0.0, 0.0, 0.0, 0.0])
+
+    with patch("ngn_agent.main.poll_once", side_effect=fake_poll_once), \
+         patch("ngn_agent.main.time.sleep"), \
+         patch("ngn_agent.main.time.monotonic", side_effect=monotonic_values), \
+         patch("ngn_agent.main.JiraClient"), \
+         patch("ngn_agent.main.anthropic.Anthropic"):
+        from ngn_agent.main import main
+        with pytest.raises(SystemExit):
+            main()
+
+    # poll_once must have been called at least twice — once raising the error,
+    # once succeeding — proving the loop recovered from the network failure.
+    assert call_count >= 2
+
+
+def test_main_loop_logs_warning_on_network_error(monkeypatch):
+    """A warning should be logged when poll_once raises httpx.ConnectError.
+
+    Patch poll_once to raise httpx.ConnectError once, then assert that
+    log.warning was called with a message that includes the error text.
+    """
+    monkeypatch.setenv("JIRA_FILTER_ID", "99")
+    monkeypatch.setenv("JIRA_BASE_URL", "https://test.atlassian.net")
+    monkeypatch.setenv("JIRA_EMAIL", "a@b.com")
+    monkeypatch.setenv("JIRA_API_TOKEN", "tok")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "key")
+
+    error_message = "Connection refused"
+    call_count = 0
+
+    def fake_poll_once(jira, claude):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            raise httpx.ConnectError(error_message)
+        raise SystemExit(0)
+
+    monotonic_values = iter([0.0, 0.0, 0.0, 0.0])
+
+    with patch("ngn_agent.main.poll_once", side_effect=fake_poll_once), \
+         patch("ngn_agent.main.time.sleep"), \
+         patch("ngn_agent.main.time.monotonic", side_effect=monotonic_values), \
+         patch("ngn_agent.main.JiraClient"), \
+         patch("ngn_agent.main.anthropic.Anthropic"), \
+         patch("ngn_agent.main.log") as mock_log:
+        from ngn_agent.main import main
+        with pytest.raises(SystemExit):
+            main()
+
+    # Verify log.warning was called and that its formatted message contains
+    # the network error text.
+    mock_log.warning.assert_called_once()
+    warning_args = mock_log.warning.call_args[0]
+    # The first arg is the format string; combine with remainder for assertion.
+    formatted = warning_args[0] % warning_args[1:]
+    assert error_message in formatted
