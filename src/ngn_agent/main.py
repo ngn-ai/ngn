@@ -64,6 +64,41 @@ def main() -> None:
             time.sleep(wait)
 
 
+def _find_open_pr(workspace: Path, branch: str) -> str | None:
+    """Check whether an open pull request already exists for *branch* in the workspace.
+
+    Runs ``gh pr list --head <branch> --state open --json url --jq '.[0].url'``
+    inside *workspace* and returns the URL string if one is found, or ``None``
+    when no open PR exists or the command fails.
+
+    Args:
+        workspace: Path to the cloned repository where the gh command is run.
+        branch: Branch name to look up (e.g. ``ngn/PROJ-42``).
+
+    Returns:
+        The PR URL string, or ``None`` if no open PR was found.
+    """
+    try:
+        result = subprocess.run(
+            [
+                "gh", "pr", "list",
+                "--head", branch,
+                "--state", "open",
+                "--json", "url",
+                "--jq", ".[0].url",
+            ],
+            capture_output=True,
+            text=True,
+            cwd=str(workspace),
+        )
+        url = result.stdout.strip()
+        return url if url else None
+    except Exception:
+        # Any subprocess error (e.g. gh not installed, not authenticated) is
+        # treated as "no open PR found" so the agent falls back to normal flow.
+        return None
+
+
 def poll_once(jira: JiraClient, claude: anthropic.Anthropic) -> None:
     """Poll Jira for a single candidate ticket and attempt to implement it.
 
@@ -122,6 +157,7 @@ def poll_once(jira: JiraClient, claude: anthropic.Anthropic) -> None:
         # the agent knows to resume rather than start from scratch.
         ticket_branch = f"ngn/{ticket['key']}"
         resume_branch: str | None = None
+        existing_pr_url: str | None = None
         if find_resume_branch(repo_url, ticket_branch):
             log.info("Resuming from existing branch %s...", ticket_branch)
             subprocess.run(
@@ -130,13 +166,26 @@ def poll_once(jira: JiraClient, claude: anthropic.Anthropic) -> None:
             )
             resume_branch = ticket_branch
 
+            # Check for an open PR on this branch so the agent can address
+            # review feedback rather than attempting to open a duplicate PR.
+            existing_pr_url = _find_open_pr(workspace, ticket_branch)
+            if existing_pr_url:
+                log.info("Found existing open PR for %s: %s", ticket_branch, existing_pr_url)
+
         log.info("Transitioning %s to IN PROGRESS...", ticket["key"])
         jira.transition_ticket(ticket["key"], "IN PROGRESS")
         log.info("Labelling %s as ngn-handled...", ticket["key"])
         jira.add_label(ticket["key"], "ngn-handled")
 
         log.info("Implementing ticket...")
-        impl = implement_ticket(ticket, workspace, claude, ancestors=ancestors or None, resume_branch=resume_branch)
+        impl = implement_ticket(
+            ticket,
+            workspace,
+            claude,
+            ancestors=ancestors or None,
+            resume_branch=resume_branch,
+            pr_url=existing_pr_url,
+        )
 
         if impl["success"]:
             log.info("Implementation complete. PR: %s", impl["pr_url"])

@@ -42,6 +42,8 @@ _SYSTEM_PROMPT = """You are an autonomous coding agent implementing a JIRA ticke
 5. Open a PR targeting main: gh pr create --base main --title "..." --body "..."
 6. Call submit_work with the PR URL and a brief summary of what was done.
 
+If a PR URL is provided in the prompt, do not create a new PR — update the existing one by pushing to its branch.
+
 ## When to call report_blocked
 
 - The ticket is ambiguous and you cannot proceed safely without clarification.
@@ -135,6 +137,7 @@ def implement_ticket(
     client: anthropic.Anthropic,
     ancestors: list[dict] | None = None,
     resume_branch: str | None = None,
+    pr_url: str | None = None,
 ) -> dict:
     """Run the agentic implementation loop for a single ticket.
 
@@ -147,6 +150,9 @@ def implement_ticket(
             branch has already been checked out in *workspace* and its name is
             injected into the initial prompt so the agent knows to continue
             from the existing work rather than starting fresh.
+        pr_url: Optional URL of an existing open pull request for this ticket.
+            When provided the agent is directed to address review feedback on
+            that PR rather than opening a new one.
 
     Returns:
         A dict with keys:
@@ -154,7 +160,7 @@ def implement_ticket(
             pr_url (str | None): Pull request URL on success.
             blocked_reason (str | None): Explanation if not successful.
     """
-    messages = [{"role": "user", "content": _build_prompt(ticket, workspace, ancestors, resume_branch)}]
+    messages = [{"role": "user", "content": _build_prompt(ticket, workspace, ancestors, resume_branch, pr_url)}]
 
     for turn in range(_MAX_TURNS):
         log.info("Turn %d/%d...", turn + 1, _MAX_TURNS)
@@ -356,6 +362,7 @@ def _build_prompt(
     workspace: Path,
     ancestors: list[dict] | None,
     resume_branch: str | None = None,
+    pr_url: str | None = None,
 ) -> str:
     """Build the initial user message for the implementation agent.
 
@@ -366,6 +373,9 @@ def _build_prompt(
         resume_branch: Optional branch name when resuming a prior attempt.
             When provided a notice is injected into the prompt instructing the
             agent to review the existing commits before continuing.
+        pr_url: Optional URL of an existing open pull request. When provided
+            a notice is injected directing the agent to address review feedback
+            on that PR instead of opening a new one.
 
     Returns:
         Formatted prompt string.
@@ -384,6 +394,16 @@ def _build_prompt(
             f"Resuming prior attempt: Branch {resume_branch} already exists and has been checked out. "
             "It contains work from a previous attempt. Review the existing commits and code before "
             "continuing — do not discard or re-do work that has already been done correctly."
+        )
+
+    # When an open PR already exists, direct the agent to address review
+    # feedback on it rather than opening a second PR.
+    if pr_url:
+        parts.append(
+            f"Open pull request: A pull request already exists at {pr_url}. Do not open a new PR. "
+            f"Instead: check out the branch, run gh pr view --comments {pr_url} to read reviewer "
+            "feedback, address all requested changes, push the updated branch, and call submit_work "
+            "with the existing PR URL once the changes are pushed."
         )
 
     parts.append("Begin by exploring the repository structure, then implement the ticket.")

@@ -384,3 +384,56 @@ def test_implement_ticket_passes_resume_branch_to_prompt(tmp_path):
     initial_user_content = messages_arg[0]["content"]
     assert "ngn/PROJ-1" in initial_user_content
     assert "Resuming prior attempt" in initial_user_content
+
+
+# ---------------------------------------------------------------------------
+# _build_prompt — PR URL section
+# ---------------------------------------------------------------------------
+
+def test_build_prompt_with_pr_url_includes_pr_section(tmp_path):
+    """Prompt contains the PR URL and 'Open pull request' when pr_url is provided."""
+    pr_url = "https://github.com/ngn-ai/ngn/pull/42"
+    prompt = _build_prompt(_make_ticket(), tmp_path, None, pr_url=pr_url)
+    assert "Open pull request" in prompt
+    assert pr_url in prompt
+
+
+def test_build_prompt_without_pr_url_omits_pr_section(tmp_path):
+    """Prompt does not contain 'Open pull request' when no pr_url is given."""
+    prompt = _build_prompt(_make_ticket(), tmp_path, None)
+    assert "Open pull request" not in prompt
+
+
+# ---------------------------------------------------------------------------
+# implement_ticket — PR URL passthrough
+# ---------------------------------------------------------------------------
+
+def test_implement_ticket_passes_pr_url_to_prompt(tmp_path):
+    """When pr_url is provided, the initial message content contains the PR URL."""
+    pr_url = "https://github.com/ngn-ai/ngn/pull/42"
+    submit = _tool_use_block("submit_work", {"pr_url": pr_url, "summary": "done"})
+    client = _make_client(_make_response([submit]))
+
+    implement_ticket(_make_ticket(), tmp_path, client, pr_url=pr_url)
+
+    first_call_kwargs = client.messages.create.call_args_list[0]
+    messages_arg = first_call_kwargs.kwargs.get("messages") or first_call_kwargs.args[0]
+    initial_user_content = messages_arg[0]["content"]
+    assert pr_url in initial_user_content
+    assert "Open pull request" in initial_user_content
+
+
+def test_implement_ticket_pr_url_defaults_to_none(tmp_path):
+    """Calling implement_ticket without pr_url uses None by default (no regression)."""
+    submit = _tool_use_block("submit_work", {"pr_url": "http://pr", "summary": "done"})
+    client = _make_client(_make_response([submit]))
+
+    # Call without pr_url — should succeed with no errors and no PR section in prompt.
+    result = implement_ticket(_make_ticket(), tmp_path, client)
+
+    assert result["success"] is True
+
+    first_call_kwargs = client.messages.create.call_args_list[0]
+    messages_arg = first_call_kwargs.kwargs.get("messages") or first_call_kwargs.args[0]
+    initial_user_content = messages_arg[0]["content"]
+    assert "Open pull request" not in initial_user_content
