@@ -152,3 +152,98 @@ def test_main_loop_calls_poll_once_repeatedly(monkeypatch):
             main()
 
     assert call_count == 3
+
+
+# ---------------------------------------------------------------------------
+# poll_once — invalid repo URL (clone failure)
+# ---------------------------------------------------------------------------
+
+def _make_valid_ticket(key="PROJ-1", repo_url="git@github.com:example/repo.git"):
+    """Return a minimal ticket dict that looks valid for poll_once."""
+    return {
+        "key": key,
+        "summary": "Test ticket",
+        "issue_type": "Task",
+        "priority": "Medium",
+        "status": "READY",
+        "parent": None,
+        "reporter": {"account_id": "abc123", "display_name": "Test User"},
+        "description": "Do something",
+        "labels": [],
+        "comments": [],
+    }
+
+
+def _make_filter_ticket(key="PROJ-1"):
+    """Return a minimal ticket summary as returned by get_tickets_from_filter."""
+    return {
+        "key": key,
+        "summary": "Test ticket",
+        "issue_type": "Task",
+        "priority": "Medium",
+        "status": "READY",
+        "created": "2024-01-01T00:00:00.000+0000",
+    }
+
+
+def test_poll_once_blocks_ticket_when_clone_fails(monkeypatch):
+    """When clone_repo raises RuntimeError (invalid repo URL), poll_once should
+    transition the ticket to BLOCKED, post a comment, and return without crashing.
+    """
+    monkeypatch.setenv("JIRA_FILTER_ID", "99")
+
+    ticket = _make_valid_ticket()
+    jira = _make_jira(tickets=[_make_filter_ticket()])
+    jira.get_ticket.return_value = ticket
+
+    # validate_ticket returns a valid result with a (bad) repo URL.
+    fake_validation = {"valid": True, "repo_url": "git@github.com:example/does-not-exist.git", "missing": []}
+
+    with patch("ngn_agent.main.validate_ticket", return_value=fake_validation), \
+         patch("ngn_agent.main.clone_repo", side_effect=RuntimeError("git clone failed: repository not found")):
+        poll_once(jira, _make_claude())
+
+    # Ticket should have been moved to BLOCKED.
+    jira.transition_ticket.assert_called_once_with(ticket["key"], "BLOCKED")
+    # A comment should have been posted explaining the failure.
+    jira.post_comment.assert_called_once()
+    comment_lines = jira.post_comment.call_args[0][1]
+    assert any("repository" in line.lower() or "cloned" in line.lower() for line in comment_lines)
+
+
+def test_poll_once_does_not_proceed_to_implement_when_clone_fails(monkeypatch):
+    """When clone fails, implement_ticket must NOT be called — the loop resumes."""
+    monkeypatch.setenv("JIRA_FILTER_ID", "99")
+
+    ticket = _make_valid_ticket()
+    jira = _make_jira(tickets=[_make_filter_ticket()])
+    jira.get_ticket.return_value = ticket
+
+    fake_validation = {"valid": True, "repo_url": "git@github.com:example/bad.git", "missing": []}
+
+    with patch("ngn_agent.main.validate_ticket", return_value=fake_validation), \
+         patch("ngn_agent.main.clone_repo", side_effect=RuntimeError("git clone failed")), \
+         patch("ngn_agent.main.implement_ticket") as mock_implement:
+        poll_once(jira, _make_claude())
+
+    mock_implement.assert_not_called()
+
+
+def test_poll_once_includes_clone_error_message_in_comment(monkeypatch):
+    """The BLOCKED comment should contain the underlying clone error message."""
+    monkeypatch.setenv("JIRA_FILTER_ID", "99")
+
+    ticket = _make_valid_ticket()
+    jira = _make_jira(tickets=[_make_filter_ticket()])
+    jira.get_ticket.return_value = ticket
+
+    error_text = "git clone failed:\nERROR: Repository not found."
+    fake_validation = {"valid": True, "repo_url": "git@github.com:example/bad.git", "missing": []}
+
+    with patch("ngn_agent.main.validate_ticket", return_value=fake_validation), \
+         patch("ngn_agent.main.clone_repo", side_effect=RuntimeError(error_text)):
+        poll_once(jira, _make_claude())
+
+    comment_lines = jira.post_comment.call_args[0][1]
+    full_comment = "\n".join(comment_lines)
+    assert error_text in full_comment
