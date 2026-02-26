@@ -2,7 +2,7 @@
 
 ## WARNING: This is an experimental project and should not be used in production ##
 
-An autonomous coding agent powered by Claude. Polls a JIRA project for eligible work, validates tickets, implements code changes, and opens pull requests. On subsequent runs, if a pull request already exists for a ticket, the agent reads reviewer comments and pushes updated code to address the feedback — no human intervention required between review cycles.
+An autonomous coding agent powered by Claude. Polls a JIRA project for eligible work, validates tickets, implements code changes, and opens pull requests. ngn-agent will read PR comments and make changes as needed.  100% powered via JIRA.
 
 ## Setup
 
