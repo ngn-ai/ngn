@@ -309,6 +309,19 @@ def test_build_prompt_with_ancestors_includes_header_and_content(tmp_path):
     assert prompt.index("EPIC_CONTENT") < prompt.index("CHILD_CONTENT")
 
 
+def test_build_prompt_with_resume_branch_includes_resume_section(tmp_path):
+    """Prompt contains the resume branch name and 'Resuming prior attempt' notice."""
+    prompt = _build_prompt(_make_ticket(), tmp_path, None, resume_branch="ngn/PROJ-1")
+    assert "Resuming prior attempt" in prompt
+    assert "ngn/PROJ-1" in prompt
+
+
+def test_build_prompt_without_resume_branch_omits_resume_section(tmp_path):
+    """Prompt does not contain 'Resuming prior attempt' when no resume branch is given."""
+    prompt = _build_prompt(_make_ticket(), tmp_path, None)
+    assert "Resuming prior attempt" not in prompt
+
+
 # ---------------------------------------------------------------------------
 # implement_ticket — agent text block logging
 # ---------------------------------------------------------------------------
@@ -355,3 +368,19 @@ def test_implement_ticket_no_text_block_does_not_error(tmp_path):
     result = implement_ticket(_make_ticket(), tmp_path, client)
 
     assert result["success"] is True
+
+
+def test_implement_ticket_passes_resume_branch_to_prompt(tmp_path):
+    """When resume_branch is provided, the initial message content contains the branch name."""
+    submit = _tool_use_block("submit_work", {"pr_url": "http://pr", "summary": "done"})
+    client = _make_client(_make_response([submit]))
+
+    implement_ticket(_make_ticket(), tmp_path, client, resume_branch="ngn/PROJ-1")
+
+    # The first call to messages.create carries the initial messages list whose
+    # first element is the user turn containing the prompt.
+    first_call_kwargs = client.messages.create.call_args_list[0]
+    messages_arg = first_call_kwargs.kwargs.get("messages") or first_call_kwargs.args[0]
+    initial_user_content = messages_arg[0]["content"]
+    assert "ngn/PROJ-1" in initial_user_content
+    assert "Resuming prior attempt" in initial_user_content
