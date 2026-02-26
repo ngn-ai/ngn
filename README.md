@@ -35,6 +35,16 @@ uv sync
 ngn-agent
 ```
 
+### Validate JIRA setup
+
+Before running the agent for the first time, verify that your JIRA instance meets all requirements:
+
+    ngn-agent --validate
+
+This checks that your credentials work, the configured filter is accessible, and that the required issue types and statuses exist. It exits with code `0` if all checks pass, `1` if any fail.
+
+**Limitation:** workflow transitions cannot be verified automatically. The check will remind you to confirm that `IN PROGRESS`, `IN REVIEW`, and `BLOCKED` transitions are defined in your project workflow — this must be done manually in JIRA.
+
 ---
 
 ## Runtime behaviour
