@@ -7,6 +7,7 @@ import time
 from pathlib import Path
 
 import anthropic
+import httpx
 
 from ngn_agent.coder import implement_ticket
 from ngn_agent.git import clone_repo, find_resume_branch
@@ -80,7 +81,12 @@ def main() -> None:
     while True:
         iteration_start = time.monotonic()
 
-        poll_once(jira, claude)
+        try:
+            poll_once(jira, claude)
+        except httpx.RequestError as exc:
+            # Transient network failures (DNS, connection refused, timeout, etc.)
+            # are caught here so the loop continues rather than crashing the agent.
+            log.warning("Network error during poll — will retry: %s", exc)
 
         # Sleep for the remainder of the interval so we poll at most once per
         # _POLL_INTERVAL seconds regardless of how long the work took.
