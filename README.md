@@ -160,3 +160,9 @@ pytest tests/ -v      # run tests
 ruff check .          # lint
 ruff format .         # format
 ```
+
+---
+
+## License
+
+Apache License 2.0. See [LICENSE](LICENSE) for the full text.
