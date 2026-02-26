@@ -1,3 +1,4 @@
+import argparse
 import logging
 import os
 import subprocess
@@ -9,7 +10,7 @@ import anthropic
 
 from ngn_agent.coder import implement_ticket
 from ngn_agent.git import clone_repo, find_resume_branch
-from ngn_agent.jira import JiraClient
+from ngn_agent.jira import JiraClient, validate_setup
 from ngn_agent.validator import validate_ticket
 
 _REQUIRED_ENV = ("ANTHROPIC_API_KEY", "JIRA_BASE_URL", "JIRA_EMAIL", "JIRA_API_TOKEN", "JIRA_FILTER_ID")
@@ -24,11 +25,37 @@ log = logging.getLogger(__name__)
 def main() -> None:
     """Entry point for ngn-agent.
 
-    Configures logging, validates required environment variables, then loops
-    forever polling Jira for new work.  Each iteration is rate-limited to at
-    most one poll every _POLL_INTERVAL seconds so the agent doesn't spin.
-    The loop runs until the process is killed (e.g. SIGINT / SIGTERM).
+    Parses CLI arguments.  When ``--validate`` is supplied, runs pre-flight
+    checks against the configured JIRA instance, prints a pass/fail report to
+    stdout, and exits with code 0 (all checks passed) or 1 (any check failed).
+    The polling loop is never started in this mode.
+
+    Without ``--validate``, configures logging, validates required environment
+    variables, then loops forever polling Jira for new work.  Each iteration is
+    rate-limited to at most one poll every _POLL_INTERVAL seconds so the agent
+    doesn't spin.  The loop runs until the process is killed (e.g. SIGINT /
+    SIGTERM).
     """
+    parser = argparse.ArgumentParser(
+        prog="ngn-agent",
+        description="Autonomous coding agent powered by Claude.",
+    )
+    parser.add_argument(
+        "--validate",
+        action="store_true",
+        help="Check JIRA configuration and report whether all requirements are met, then exit.",
+    )
+    # Use parse_known_args so that any unrecognised arguments (e.g. pytest
+    # passes its own argv when calling main() in tests) are silently ignored
+    # rather than causing argparse to exit with an error.
+    args, _ = parser.parse_known_args()
+
+    if args.validate:
+        _run_validate()
+        # _run_validate always calls sys.exit; this line is unreachable but
+        # makes the control flow explicit.
+        return
+
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)-8s %(message)s",
@@ -62,6 +89,59 @@ def main() -> None:
         if wait > 0:
             log.info("Sleeping %.1fs until next poll...", wait)
             time.sleep(wait)
+
+
+def _run_validate() -> None:
+    """Run pre-flight JIRA validation checks and print a formatted report.
+
+    Calls ``validate_setup()`` to obtain a list of check results, prints each
+    result with a ``✓`` (pass), ``✗`` (fail), or ``⚠`` (warning) prefix, then
+    appends a static reminder about workflow transitions (which cannot be
+    verified via the API without a live ticket).
+
+    Exits with code 0 when all checks passed, or 1 if any check failed.
+    """
+    results = validate_setup()
+
+    for result in results:
+        symbol = "✓" if result["passed"] else "✗"
+        name = result["name"]
+        detail = result["detail"]
+
+        # Format the line based on check name so the output matches the
+        # documented format (detail is shown in parentheses for auth / filter,
+        # or appended with a colon for issue types / statuses).
+        if name == "Environment variables":
+            if result["passed"]:
+                print(f"{symbol} {name}")
+            else:
+                print(f"{symbol} {name}: {detail}")
+        elif name == "JIRA authentication":
+            if result["passed"]:
+                print(f"{symbol} {name} ({detail})")
+            else:
+                print(f"{symbol} {name}: {detail}")
+        elif name == "Filter accessible":
+            if result["passed"]:
+                print(f"{symbol} {name} ({detail})")
+            else:
+                print(f"{symbol} {name}: {detail}")
+        elif name in ("Issue types", "Statuses"):
+            print(f"{symbol} {name}: {detail}")
+        else:
+            # Fallback for any future check names.
+            print(f"{symbol} {name}: {detail}")
+
+    # Transitions can never be verified without a live ticket — always shown
+    # as a warning regardless of the other results.
+    print(
+        "\u26a0 Transitions: cannot be verified without a live ticket"
+        " \u2014 confirm IN PROGRESS, IN REVIEW, and BLOCKED transitions"
+        " exist in your project workflow manually"
+    )
+
+    all_passed = all(r["passed"] for r in results)
+    sys.exit(0 if all_passed else 1)
 
 
 def _find_open_pr(workspace: Path, branch: str) -> str | None:
