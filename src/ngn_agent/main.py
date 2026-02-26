@@ -1,5 +1,6 @@
 import logging
 import os
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -7,7 +8,7 @@ from pathlib import Path
 import anthropic
 
 from ngn_agent.coder import implement_ticket
-from ngn_agent.git import clone_repo
+from ngn_agent.git import clone_repo, find_resume_branch
 from ngn_agent.jira import JiraClient
 from ngn_agent.validator import validate_ticket
 
@@ -115,13 +116,27 @@ def poll_once(jira: JiraClient, claude: anthropic.Anthropic) -> None:
         log.info("Ticket is valid. Repo: %s  Workspace: %s", repo_url, workspace)
         log.info("Cloning repository...")
         clone_repo(repo_url, workspace)
+
+        # Check whether a prior attempt already pushed a branch for this ticket.
+        # If so, check it out and pass the name through to implement_ticket so
+        # the agent knows to resume rather than start from scratch.
+        ticket_branch = f"ngn/{ticket['key']}"
+        resume_branch: str | None = None
+        if find_resume_branch(repo_url, ticket_branch):
+            log.info("Resuming from existing branch %s...", ticket_branch)
+            subprocess.run(
+                ["git", "-C", str(workspace), "checkout", ticket_branch],
+                check=True,
+            )
+            resume_branch = ticket_branch
+
         log.info("Transitioning %s to IN PROGRESS...", ticket["key"])
         jira.transition_ticket(ticket["key"], "IN PROGRESS")
         log.info("Labelling %s as ngn-handled...", ticket["key"])
         jira.add_label(ticket["key"], "ngn-handled")
 
         log.info("Implementing ticket...")
-        impl = implement_ticket(ticket, workspace, claude, ancestors=ancestors or None)
+        impl = implement_ticket(ticket, workspace, claude, ancestors=ancestors or None, resume_branch=resume_branch)
 
         if impl["success"]:
             log.info("Implementation complete. PR: %s", impl["pr_url"])
