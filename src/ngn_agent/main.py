@@ -150,7 +150,22 @@ def poll_once(jira: JiraClient, claude: anthropic.Anthropic) -> None:
         workspace = (Path(os.environ.get("WORKSPACE_DIR", "workspaces")) / ticket["key"]).resolve()
         log.info("Ticket is valid. Repo: %s  Workspace: %s", repo_url, workspace)
         log.info("Cloning repository...")
-        clone_repo(repo_url, workspace)
+        try:
+            clone_repo(repo_url, workspace)
+        except RuntimeError as exc:
+            # The repo URL is invalid or inaccessible — block the ticket and
+            # resume the outer polling loop rather than crashing the agent.
+            log.error("Failed to clone repository: %s", exc)
+            log.info("Transitioning %s to BLOCKED...", ticket["key"])
+            jira.transition_ticket(ticket["key"], "BLOCKED")
+            reporter = ticket.get("reporter")
+            mention = (reporter["account_id"], reporter["display_name"]) if reporter else None
+            lines = [
+                "This ticket has been blocked by Agent ngn.",
+                f"The repository could not be cloned: {exc}",
+            ]
+            jira.post_comment(ticket["key"], lines, mention=mention)
+            return
 
         # Check whether a prior attempt already pushed a branch for this ticket.
         # If so, check it out and pass the name through to implement_ticket so
