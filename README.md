@@ -1,6 +1,6 @@
 # ngn-agent
 
-An autonomous coding agent powered by Claude. Polls a JIRA project for eligible work, validates tickets, and (eventually) implements, tests, and opens pull requests for approved tasks.
+An autonomous coding agent powered by Claude. Polls a JIRA project for eligible work, validates tickets, implements code changes, and opens pull requests for approved tasks.
 
 ## Setup
 
@@ -34,6 +34,16 @@ uv sync
 ```bash
 ngn-agent
 ```
+
+---
+
+## Runtime behaviour
+
+The agent runs continuously, polling the configured JIRA filter every 30 seconds. On each poll it picks the highest-priority eligible ticket, validates it, implements the changes, and opens a pull request — then sleeps for the remainder of the 30-second interval before polling again.
+
+**Branch resumption:** Before cloning a repository, the agent checks whether a `ngn/<ticket-key>` branch already exists on the remote. If it does, the branch is checked out and the agent resumes from the existing work rather than starting from scratch.
+
+**PR review handling:** If a `ngn/<ticket-key>` branch already has an open pull request, the agent reads the reviewer feedback and addresses the requested changes on the existing branch and PR rather than opening a duplicate.
 
 ---
 

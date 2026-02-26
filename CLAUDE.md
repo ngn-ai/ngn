@@ -1,15 +1,6 @@
 # ngn-agent
 
-An autonomous coding agent powered by Claude. In its final form it will:
-1. Monitor JIRA for eligible tasks
-2. Clone target repositories from Git
-3. Validate that a ticket has enough detail to act on
-4. Implement code changes
-5. Test the implementation
-6. Commit to a branch
-7. Open a pull request on GitHub
-
-The project is being built incrementally — start simple, add capabilities over time.
+An autonomous coding agent powered by Claude. Polls a JIRA project for eligible work, validates tickets, implements code changes, and opens pull requests for approved tasks.
 
 ## Project structure
 
@@ -23,7 +14,11 @@ ngn-agent/
 └── src/
     └── ngn_agent/
         ├── __init__.py
-        └── main.py
+        ├── main.py        — entry point; continuous polling loop and top-level orchestration
+        ├── jira.py        — JIRA API client; fetches tickets, posts comments, drives transitions
+        ├── validator.py   — uses Claude to check whether a ticket has sufficient information
+        ├── git.py         — clones repositories and checks for existing remote branches
+        └── coder.py       — agentic implementation loop; reads/writes files and opens PRs
 ```
 
 - `src/` layout (package is `ngn_agent`)
@@ -59,6 +54,11 @@ uv run ruff format .     # format
 ## Environment
 
 - `ANTHROPIC_API_KEY` must be set in the environment before running.
+- `JIRA_BASE_URL` — JIRA Cloud base URL, e.g. `https://yourcompany.atlassian.net`
+- `JIRA_EMAIL` — email address associated with the JIRA API token
+- `JIRA_API_TOKEN` — JIRA Cloud API token
+- `JIRA_FILTER_ID` — numeric ID of the saved JIRA filter to poll for candidate tickets
+- `WORKSPACE_DIR` — directory where repositories are cloned (default: `workspaces/`)
 
 ## Style / conventions
 
