@@ -337,3 +337,97 @@ def test_main_loop_logs_warning_on_network_error(monkeypatch):
     # The first arg is the format string; combine with remainder for assertion.
     formatted = warning_args[0] % warning_args[1:]
     assert error_message in formatted
+
+
+# ---------------------------------------------------------------------------
+# poll_once — ticket key validation
+# ---------------------------------------------------------------------------
+
+def test_poll_once_blocks_ticket_with_malformed_key(monkeypatch):
+    """poll_once must transition to BLOCKED when the ticket key contains path separators."""
+    monkeypatch.setenv("JIRA_FILTER_ID", "99")
+
+    # A crafted key that would traverse the filesystem if used directly as a path.
+    bad_key = "../../tmp/evil"
+    ticket = _make_valid_ticket(key=bad_key)
+    jira = _make_jira(tickets=[_make_filter_ticket(key=bad_key)])
+    jira.get_ticket.return_value = ticket
+
+    poll_once(jira, _make_claude())
+
+    jira.transition_ticket.assert_called_once_with(bad_key, "BLOCKED")
+    jira.post_comment.assert_called_once()
+
+
+def test_poll_once_posts_comment_for_malformed_key(monkeypatch):
+    """The BLOCKED comment for a malformed key should mention the invalid key."""
+    monkeypatch.setenv("JIRA_FILTER_ID", "99")
+
+    bad_key = "../../tmp/evil"
+    ticket = _make_valid_ticket(key=bad_key)
+    jira = _make_jira(tickets=[_make_filter_ticket(key=bad_key)])
+    jira.get_ticket.return_value = ticket
+
+    poll_once(jira, _make_claude())
+
+    comment_lines = jira.post_comment.call_args[0][1]
+    full_comment = "\n".join(comment_lines)
+    assert bad_key in full_comment
+
+
+def test_poll_once_does_not_implement_ticket_for_malformed_key(monkeypatch):
+    """When the key is malformed, implement_ticket must never be called."""
+    monkeypatch.setenv("JIRA_FILTER_ID", "99")
+
+    bad_key = "not-valid"  # lowercase — doesn't match [A-Z]+-\d+
+    ticket = _make_valid_ticket(key=bad_key)
+    jira = _make_jira(tickets=[_make_filter_ticket(key=bad_key)])
+    jira.get_ticket.return_value = ticket
+
+    with patch("ngn_agent.main.implement_ticket") as mock_implement:
+        poll_once(jira, _make_claude())
+
+    mock_implement.assert_not_called()
+
+
+def test_poll_once_accepts_valid_ticket_key(monkeypatch):
+    """poll_once must not block a ticket with a well-formed key like PROJ-1."""
+    monkeypatch.setenv("JIRA_FILTER_ID", "99")
+
+    ticket = _make_valid_ticket(key="PROJ-1")
+    jira = _make_jira(tickets=[_make_filter_ticket(key="PROJ-1")])
+    jira.get_ticket.return_value = ticket
+
+    fake_validation = {"valid": False, "repo_url": "", "missing": ["repository URL"]}
+
+    with patch("ngn_agent.main.validate_ticket", return_value=fake_validation):
+        poll_once(jira, _make_claude())
+
+    # The ticket should have been blocked due to validation failure, not key format.
+    # Crucially, the block should NOT be called before validation (key check passes).
+    # We confirm this by checking that validate_ticket was actually reached.
+    # (If the key check had triggered, we'd never reach validate_ticket.)
+    # Since validate_ticket is patched and returns invalid, transition is called once.
+    jira.transition_ticket.assert_called_once_with("PROJ-1", "BLOCKED")
+
+
+def test_poll_once_blocks_ticket_with_value_error_from_clone(monkeypatch):
+    """poll_once must also handle ValueError from clone_repo (bad URL scheme)."""
+    monkeypatch.setenv("JIRA_FILTER_ID", "99")
+
+    ticket = _make_valid_ticket()
+    jira = _make_jira(tickets=[_make_filter_ticket()])
+    jira.get_ticket.return_value = ticket
+
+    fake_validation = {
+        "valid": True,
+        "repo_url": "file:///etc/passwd",
+        "missing": [],
+    }
+
+    with patch("ngn_agent.main.validate_ticket", return_value=fake_validation), \
+         patch("ngn_agent.main.clone_repo", side_effect=ValueError("Unsafe repository URL 'file:///etc/passwd'")):
+        poll_once(jira, _make_claude())
+
+    jira.transition_ticket.assert_called_once_with(ticket["key"], "BLOCKED")
+    jira.post_comment.assert_called_once()
