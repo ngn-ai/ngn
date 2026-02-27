@@ -89,10 +89,11 @@ def main() -> None:
 
         try:
             poll_once(jira, claude)
-        except httpx.RequestError as exc:
-            # Transient network failures (DNS, connection refused, timeout, etc.)
-            # are caught here so the loop continues rather than crashing the agent.
-            log.warning("Network error during poll — will retry: %s", exc)
+        except (httpx.RequestError, httpx.HTTPStatusError) as exc:
+            # Transient failures — network errors (DNS, connection refused, timeout)
+            # and HTTP error responses (4xx/5xx) from Jira — are caught here so the
+            # loop continues rather than crashing the agent.
+            log.warning("Error during poll — will retry: %s", exc)
 
         # Sleep for the remainder of the interval so we poll at most once per
         # _POLL_INTERVAL seconds regardless of how long the work took.
