@@ -73,11 +73,11 @@ def _make_client(*responses):
 def test_read_file_returns_contents(tmp_path):
     f = tmp_path / "hello.txt"
     f.write_text("hello world")
-    assert _read_file(str(f)) == "hello world"
+    assert _read_file(str(f), tmp_path) == "hello world"
 
 
-def test_read_file_missing_returns_error():
-    result = _read_file("/nonexistent/path/file.txt")
+def test_read_file_missing_returns_error(tmp_path):
+    result = _read_file(str(tmp_path / "nonexistent.txt"), tmp_path)
     assert result.startswith("Error reading")
 
 
@@ -87,20 +87,20 @@ def test_read_file_missing_returns_error():
 
 def test_write_file_creates_file(tmp_path):
     path = str(tmp_path / "out.txt")
-    result = _write_file(path, "content")
+    result = _write_file(path, "content", tmp_path)
     assert "Wrote" in result
     assert Path(path).read_text() == "content"
 
 
 def test_write_file_creates_parent_dirs(tmp_path):
     path = str(tmp_path / "a" / "b" / "c.txt")
-    _write_file(path, "deep")
+    _write_file(path, "deep", tmp_path)
     assert Path(path).read_text() == "deep"
 
 
 def test_write_file_error_returns_message(tmp_path):
     # Write to a path that is actually a directory
-    result = _write_file(str(tmp_path), "oops")
+    result = _write_file(str(tmp_path), "oops", tmp_path)
     assert result.startswith("Error writing")
 
 
@@ -437,3 +437,45 @@ def test_implement_ticket_pr_url_defaults_to_none(tmp_path):
     messages_arg = first_call_kwargs.kwargs.get("messages") or first_call_kwargs.args[0]
     initial_user_content = messages_arg[0]["content"]
     assert "Open pull request" not in initial_user_content
+
+
+# ---------------------------------------------------------------------------
+# _read_file — path traversal protection
+# ---------------------------------------------------------------------------
+
+def test_read_file_rejects_path_outside_workspace(tmp_path):
+    """_read_file must return an error string when the path escapes the workspace."""
+    # Construct a traversal path that resolves outside tmp_path.
+    traversal = str(tmp_path / ".." / "etc" / "passwd")
+    result = _read_file(traversal, tmp_path)
+    assert result.startswith("Error")
+    assert "outside the workspace" in result
+
+
+def test_read_file_allows_path_inside_workspace(tmp_path):
+    """_read_file must succeed for a valid path inside the workspace."""
+    f = tmp_path / "subdir" / "data.txt"
+    f.parent.mkdir(parents=True)
+    f.write_text("safe content")
+    result = _read_file(str(f), tmp_path)
+    assert result == "safe content"
+
+
+# ---------------------------------------------------------------------------
+# _write_file — path traversal protection
+# ---------------------------------------------------------------------------
+
+def test_write_file_rejects_path_outside_workspace(tmp_path):
+    """_write_file must return an error string when the path escapes the workspace."""
+    traversal = str(tmp_path / ".." / "evil.txt")
+    result = _write_file(traversal, "bad data", tmp_path)
+    assert result.startswith("Error")
+    assert "outside the workspace" in result
+
+
+def test_write_file_allows_path_inside_workspace(tmp_path):
+    """_write_file must succeed for a valid path inside the workspace."""
+    dest = str(tmp_path / "output" / "result.txt")
+    result = _write_file(dest, "good data", tmp_path)
+    assert "Wrote" in result
+    assert Path(dest).read_text() == "good data"

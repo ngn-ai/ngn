@@ -1,4 +1,5 @@
 import logging
+import re
 import subprocess
 import time
 from pathlib import Path
@@ -12,6 +13,9 @@ _MAX_TURNS = 100
 _TOKEN_LIMIT = 180_000  # Claude Sonnet context window is 200K; leave headroom
 _MAX_RETRIES = 60
 _RETRY_DELAY = 60
+
+# Regex that a valid Jira ticket key must match (e.g. "NGN-24", "PROJ-1").
+_TICKET_KEY_RE = re.compile(r"^[A-Z]+-\d+$")
 
 _SYSTEM_PROMPT = """You are an autonomous coding agent implementing a JIRA ticket. Your job is to:
 
@@ -248,17 +252,18 @@ def _dispatch(name: str, inputs: dict, workspace: Path) -> str:
     Args:
         name: Tool name as declared in _TOOLS.
         inputs: Tool input arguments from the model.
-        workspace: Repository root, used as the default cwd for run_command.
+        workspace: Repository root, used as the sandbox boundary for file
+            operations and as the default cwd for run_command.
 
     Returns:
         String result to return to the model as a tool result.
     """
     if name == "read_file":
         log.info("  read_file:      %s", inputs["path"])
-        return _read_file(inputs["path"])
+        return _read_file(inputs["path"], workspace)
     if name == "write_file":
         log.info("  write_file:     %s", inputs["path"])
-        return _write_file(inputs["path"], inputs["content"])
+        return _write_file(inputs["path"], inputs["content"], workspace)
     if name == "list_directory":
         log.info("  list_directory: %s", inputs["path"])
         return _list_directory(inputs["path"])
@@ -268,35 +273,60 @@ def _dispatch(name: str, inputs: dict, workspace: Path) -> str:
     return f"Unknown tool: {name}"
 
 
-def _read_file(path: str) -> str:
+def _read_file(path: str, workspace: Path) -> str:
     """Read and return the contents of a file.
 
+    The resolved path must fall within *workspace* to prevent path traversal
+    attacks (e.g. a manipulated ticket supplying ``../../etc/passwd``).  When
+    the check fails an error string is returned to the model rather than
+    raising so the agent can handle the situation gracefully.
+
     Args:
-        path: Path to the file to read.
+        path: Path to the file to read, as supplied by the model.
+        workspace: Absolute path of the workspace directory that acts as the
+            sandbox root; the requested path must resolve to a location inside
+            this directory.
 
     Returns:
-        File contents as a string, or an error message.
+        File contents as a string, or an error message if the path escapes the
+        workspace or the file cannot be read.
     """
     try:
-        return Path(path).read_text()
+        resolved = Path(path).resolve()
+        # Ensure the resolved path is strictly inside the workspace root.
+        # Path.is_relative_to() was introduced in Python 3.9.
+        if not resolved.is_relative_to(workspace.resolve()):
+            return f"Error: path '{path}' is outside the workspace and cannot be accessed"
+        return resolved.read_text()
     except Exception as exc:
         return f"Error reading {path}: {exc}"
 
 
-def _write_file(path: str, content: str) -> str:
+def _write_file(path: str, content: str, workspace: Path) -> str:
     """Write content to a file, creating parent directories if needed.
 
+    The resolved path must fall within *workspace* to prevent path traversal
+    attacks.  When the check fails an error string is returned to the model
+    rather than raising so the agent can handle the situation gracefully.
+
     Args:
-        path: Path to the file to write.
+        path: Path to the file to write, as supplied by the model.
         content: Content to write.
+        workspace: Absolute path of the workspace directory that acts as the
+            sandbox root; the requested path must resolve to a location inside
+            this directory.
 
     Returns:
-        Confirmation message, or an error message.
+        Confirmation message, or an error message if the path escapes the
+        workspace or the file cannot be written.
     """
     try:
-        p = Path(path)
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(content)
+        resolved = Path(path).resolve()
+        # Ensure the resolved path is strictly inside the workspace root.
+        if not resolved.is_relative_to(workspace.resolve()):
+            return f"Error: path '{path}' is outside the workspace and cannot be written"
+        resolved.parent.mkdir(parents=True, exist_ok=True)
+        resolved.write_text(content)
         return f"Wrote {len(content)} bytes to {path}"
     except Exception as exc:
         return f"Error writing {path}: {exc}"

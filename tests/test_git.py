@@ -72,3 +72,66 @@ def test_find_resume_branch_returns_false_on_error():
     with patch("subprocess.run", side_effect=Exception("git not found")):
         result = find_resume_branch("https://github.com/example/repo.git", "ngn/PROJ-1")
     assert result is False
+
+
+# ---------------------------------------------------------------------------
+# clone_repo — URL scheme validation
+# ---------------------------------------------------------------------------
+
+def test_clone_repo_accepts_https_url(tmp_path):
+    """clone_repo must not raise for a well-formed https:// URL."""
+    dest = tmp_path / "repo"
+    with patch("subprocess.run", return_value=_make_result()):
+        # Should not raise ValueError.
+        clone_repo("https://github.com/example/repo.git", dest)
+
+
+def test_clone_repo_accepts_git_at_url(tmp_path):
+    """clone_repo must not raise for a well-formed git@ SSH URL."""
+    dest = tmp_path / "repo"
+    with patch("subprocess.run", return_value=_make_result()):
+        clone_repo("git@github.com:example/repo.git", dest)
+
+
+def test_clone_repo_rejects_file_url(tmp_path):
+    """clone_repo must raise ValueError for a file:// URL."""
+    dest = tmp_path / "repo"
+    with pytest.raises(ValueError, match="Unsafe repository URL"):
+        clone_repo("file:///etc/passwd", dest)
+
+
+def test_clone_repo_rejects_bare_path(tmp_path):
+    """clone_repo must raise ValueError for a bare filesystem path."""
+    dest = tmp_path / "repo"
+    with pytest.raises(ValueError, match="Unsafe repository URL"):
+        clone_repo("/tmp/local-repo", dest)
+
+
+def test_clone_repo_rejects_http_url(tmp_path):
+    """clone_repo must raise ValueError for plain http:// (non-TLS) URLs."""
+    dest = tmp_path / "repo"
+    with pytest.raises(ValueError, match="Unsafe repository URL"):
+        clone_repo("http://example.com/repo.git", dest)
+
+
+def test_clone_repo_rejects_option_injection(tmp_path):
+    """clone_repo must raise ValueError for strings that look like git options."""
+    dest = tmp_path / "repo"
+    with pytest.raises(ValueError, match="Unsafe repository URL"):
+        clone_repo("--upload-pack=evil", dest)
+
+
+def test_clone_repo_rejects_ssh_url_without_at(tmp_path):
+    """clone_repo must raise ValueError for ssh:// scheme (only git@ is allowed)."""
+    dest = tmp_path / "repo"
+    with pytest.raises(ValueError, match="Unsafe repository URL"):
+        clone_repo("ssh://git@github.com/example/repo.git", dest)
+
+
+def test_clone_repo_does_not_call_subprocess_for_bad_url(tmp_path):
+    """Subprocess must never be invoked when the URL scheme is rejected."""
+    dest = tmp_path / "repo"
+    with patch("subprocess.run") as mock_run:
+        with pytest.raises(ValueError):
+            clone_repo("file:///etc/passwd", dest)
+    mock_run.assert_not_called()

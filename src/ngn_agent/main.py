@@ -1,6 +1,7 @@
 import argparse
 import logging
 import os
+import re
 import subprocess
 import sys
 import time
@@ -19,6 +20,11 @@ _API_UNAVAILABLE = "Anthropic API was unavailable for an extended period — ple
 
 # Minimum number of seconds to wait between Jira polls so we don't spin.
 _POLL_INTERVAL = 30
+
+# Pattern that every Jira ticket key must match before we use it to construct
+# a filesystem path.  Prevents directory-traversal via a crafted key such as
+# "../../tmp/evil".
+_TICKET_KEY_RE = re.compile(r"^[A-Z]+-\d+$")
 
 log = logging.getLogger(__name__)
 
@@ -194,6 +200,11 @@ def poll_once(jira: JiraClient, claude: anthropic.Anthropic) -> None:
     the ticket as BLOCKED on failure).  It is a no-op when no candidate tickets
     are found.
 
+    Ticket key validation is applied before constructing a workspace path.
+    Keys that do not match ``[A-Z]+-\\d+`` (e.g. ``../../tmp/evil``) are
+    rejected immediately: the ticket is transitioned to BLOCKED and a comment
+    is posted before returning.
+
     Args:
         jira: Authenticated Jira client.
         claude: Anthropic API client used for validation and implementation.
@@ -210,6 +221,24 @@ def poll_once(jira: JiraClient, claude: anthropic.Anthropic) -> None:
 
     log.info("Fetching full ticket details...")
     ticket = jira.get_ticket(top["key"])
+
+    # Guard against malformed ticket keys before using the key to build a
+    # filesystem path.  A crafted key like "../../tmp/evil" would otherwise
+    # resolve to an arbitrary directory outside the workspace root.
+    if not _TICKET_KEY_RE.match(ticket["key"]):
+        log.error("Ticket key '%s' does not match expected pattern — blocking.", ticket["key"])
+        jira.transition_ticket(ticket["key"], "BLOCKED")
+        reporter = ticket.get("reporter")
+        mention = (reporter["account_id"], reporter["display_name"]) if reporter else None
+        jira.post_comment(
+            ticket["key"],
+            [
+                "This ticket has been blocked by Agent ngn.",
+                f"The ticket key '{ticket['key']}' is not a valid Jira key (expected format: PROJECT-123).",
+            ],
+            mention=mention,
+        )
+        return
 
     ancestors = []
     current = ticket
@@ -238,9 +267,10 @@ def poll_once(jira: JiraClient, claude: anthropic.Anthropic) -> None:
         log.info("Cloning repository...")
         try:
             clone_repo(repo_url, workspace)
-        except RuntimeError as exc:
-            # The repo URL is invalid or inaccessible — block the ticket and
-            # resume the outer polling loop rather than crashing the agent.
+        except (RuntimeError, ValueError) as exc:
+            # The repo URL is invalid, uses a disallowed scheme, or is
+            # inaccessible — block the ticket and resume the outer polling loop
+            # rather than crashing the agent.
             log.error("Failed to clone repository: %s", exc)
             log.info("Transitioning %s to BLOCKED...", ticket["key"])
             jira.transition_ticket(ticket["key"], "BLOCKED")
