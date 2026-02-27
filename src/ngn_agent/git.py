@@ -2,17 +2,37 @@ import shutil
 import subprocess
 from pathlib import Path
 
+# URL schemes that are safe to pass to git clone.  Only HTTPS and SSH (git@)
+# URLs are accepted; bare paths, file:// URLs, and option-injection strings
+# (e.g. --upload-pack=...) are all rejected.
+_ALLOWED_URL_PREFIXES = ("https://", "git@")
+
 
 def clone_repo(repo_url: str, dest: Path) -> None:
     """Clone a Git repository into *dest*, removing any pre-existing directory first.
 
+    Only ``https://`` and ``git@`` URLs are accepted.  Any other scheme (e.g.
+    ``file://``, a bare filesystem path, or an option-injection string) raises
+    ``ValueError`` before the subprocess is started, so the caller can block
+    the ticket without running arbitrary git sub-commands.
+
     Args:
-        repo_url: Remote URL of the repository to clone.
+        repo_url: Remote URL of the repository to clone.  Must start with
+            ``https://`` or ``git@``.
         dest: Local path where the repository should be cloned.
 
     Raises:
+        ValueError: If *repo_url* does not start with an allowed scheme prefix.
         RuntimeError: If git clone exits with a non-zero return code.
     """
+    # Validate the URL scheme before touching the filesystem or spawning a
+    # subprocess so that dangerous URLs (file://, bare paths, flag injection)
+    # are rejected early.
+    if not any(repo_url.startswith(prefix) for prefix in _ALLOWED_URL_PREFIXES):
+        raise ValueError(
+            f"Unsafe repository URL '{repo_url}': only https:// and git@ URLs are allowed"
+        )
+
     if dest.exists():
         shutil.rmtree(dest)
     dest.parent.mkdir(parents=True, exist_ok=True)
