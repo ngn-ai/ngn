@@ -201,7 +201,10 @@ def implement_ticket(
         tool_results = []
         for block in response.content:
             if block.type == "tool_use":
-                result_text = _dispatch(block.name, block.input, workspace)
+                try:
+                    result_text = _dispatch(block.name, block.input, workspace)
+                except Exception as exc:
+                    result_text = f"Error: {exc}"
                 tool_results.append({
                     "type": "tool_result",
                     "tool_use_id": block.id,
